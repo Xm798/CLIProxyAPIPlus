@@ -570,6 +570,13 @@ func (e *KiroExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 
 	kiroModelID := e.mapModelToKiro(req.Model)
 
+	// Fetch profileArn if missing (for imported accounts from Kiro IDE)
+	if profileArn == "" {
+		if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+			profileArn = fetched
+		}
+	}
+
 	// Determine agentic mode and effective profile ARN using helper functions
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
 	effectiveProfileArn := getEffectiveProfileArnWithWarning(auth, profileArn)
@@ -751,6 +758,11 @@ func (e *KiroExecutor) executeWithRetry(ctx context.Context, auth *cliproxyauth.
 						// Continue anyway - the token is valid for this request
 					}
 					accessToken, profileArn = kiroCredentials(auth)
+					if profileArn == "" {
+						if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+							profileArn = fetched
+						}
+					}
 					// Rebuild payload with new profile ARN if changed
 					kiroPayload, _ = buildKiroPayloadForFormat(body, kiroModelID, profileArn, currentOrigin, isAgentic, isChatOnly, from, opts.Headers)
 					if attempt < maxRetries {
@@ -818,6 +830,11 @@ func (e *KiroExecutor) executeWithRetry(ctx context.Context, auth *cliproxyauth.
 							// Continue anyway - the token is valid for this request
 						}
 						accessToken, profileArn = kiroCredentials(auth)
+						if profileArn == "" {
+							if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+								profileArn = fetched
+							}
+						}
 						kiroPayload, _ = buildKiroPayloadForFormat(body, kiroModelID, profileArn, currentOrigin, isAgentic, isChatOnly, from, opts.Headers)
 						log.Infof("kiro: token refreshed for 403, retrying request")
 						continue
@@ -969,6 +986,13 @@ func (e *KiroExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
 
 	kiroModelID := e.mapModelToKiro(req.Model)
+
+	// Fetch profileArn if missing (for imported accounts from Kiro IDE)
+	if profileArn == "" {
+		if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+			profileArn = fetched
+		}
+	}
 
 	// Determine agentic mode and effective profile ARN using helper functions
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
@@ -1150,6 +1174,11 @@ func (e *KiroExecutor) executeStreamWithRetry(ctx context.Context, auth *cliprox
 						// Continue anyway - the token is valid for this request
 					}
 					accessToken, profileArn = kiroCredentials(auth)
+					if profileArn == "" {
+						if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+							profileArn = fetched
+						}
+					}
 					// Rebuild payload with new profile ARN if changed
 					kiroPayload, _ = buildKiroPayloadForFormat(body, kiroModelID, profileArn, currentOrigin, isAgentic, isChatOnly, from, opts.Headers)
 					if attempt < maxRetries {
@@ -1217,6 +1246,11 @@ func (e *KiroExecutor) executeStreamWithRetry(ctx context.Context, auth *cliprox
 							// Continue anyway - the token is valid for this request
 						}
 						accessToken, profileArn = kiroCredentials(auth)
+						if profileArn == "" {
+							if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+								profileArn = fetched
+							}
+						}
 						kiroPayload, _ = buildKiroPayloadForFormat(body, kiroModelID, profileArn, currentOrigin, isAgentic, isChatOnly, from, opts.Headers)
 						log.Infof("kiro: token refreshed for 403, retrying stream request")
 						continue
@@ -1320,31 +1354,24 @@ func determineAgenticMode(model string) (isAgentic, isChatOnly bool) {
 // and logs a warning if profileArn is missing for non-builder-id auth.
 // This consolidates the auth_method check that was previously done separately.
 //
-// AWS SSO OIDC (Builder ID/IDC) users don't need profileArn - sending it causes 403 errors.
-// Only Kiro Desktop (social auth like Google/GitHub) users need profileArn.
+// Builder ID users don't need profileArn - sending it causes 403 errors.
 //
 // Detection logic (matching kiro-openai-gateway):
-// 1. Check auth_method field: "builder-id" or "idc"
+// 1. Check auth_method field: "builder-id"
 // 2. Check auth_type field: "aws_sso_oidc" (from kiro-cli tokens)
 // 3. Check for client_id + client_secret presence (AWS SSO OIDC signature)
 func getEffectiveProfileArnWithWarning(auth *cliproxyauth.Auth, profileArn string) string {
 	if auth != nil && auth.Metadata != nil {
-		// Check 1: auth_method field (from CLIProxyAPI tokens)
-		if authMethod, ok := auth.Metadata["auth_method"].(string); ok && (authMethod == "builder-id" || authMethod == "idc") {
-			return "" // AWS SSO OIDC - don't include profileArn
+		// Check 1: auth_method field,skip for builder-id,
+		if authMethod, ok := auth.Metadata["auth_method"].(string); ok && authMethod == "builder-id" {
+			return ""
 		}
 		// Check 2: auth_type field (from kiro-cli tokens)
 		if authType, ok := auth.Metadata["auth_type"].(string); ok && authType == "aws_sso_oidc" {
 			return "" // AWS SSO OIDC - don't include profileArn
 		}
-		// Check 3: client_id + client_secret presence (AWS SSO OIDC signature, like kiro-openai-gateway)
-		_, hasClientID := auth.Metadata["client_id"].(string)
-		_, hasClientSecret := auth.Metadata["client_secret"].(string)
-		if hasClientID && hasClientSecret {
-			return "" // AWS SSO OIDC - don't include profileArn
-		}
 	}
-	// For social auth (Kiro Desktop), profileArn is required
+	// For social auth and IDC, profileArn is required
 	if profileArn == "" {
 		log.Warnf("kiro: profile ARN not found in auth, API calls may fail")
 	}
@@ -3577,6 +3604,48 @@ func (e *KiroExecutor) persistRefreshedAuth(auth *cliproxyauth.Auth) error {
 
 	log.Debugf("kiro executor: persisted refreshed auth to %s", authPath)
 	return nil
+}
+
+// fetchAndSaveProfileArn fetches profileArn from API if missing, updates auth and persists to file.
+// This enables imported IDC accounts (from Kiro IDE) that lack profileArn to work correctly.
+// NOTE: Only IDC accounts need profileArn. Builder ID accounts don't have profiles.
+func (e *KiroExecutor) fetchAndSaveProfileArn(ctx context.Context, auth *cliproxyauth.Auth, accessToken string) string {
+	if auth == nil || auth.Metadata == nil {
+		return ""
+	}
+
+	// Skip for Builder ID - they don't have profiles
+	if authMethod, ok := auth.Metadata["auth_method"].(string); ok && authMethod == "builder-id" {
+		log.Debugf("kiro executor: skipping profileArn fetch for builder-id auth")
+		return ""
+	}
+
+	clientID, _ := auth.Metadata["client_id"].(string)
+	refreshToken, _ := auth.Metadata["refresh_token"].(string)
+
+	// Use existing SSOOIDCClient to fetch profile
+	ssoClient := kiroauth.NewSSOOIDCClient(e.cfg)
+	profileArn := ssoClient.FetchProfileArn(ctx, accessToken, clientID, refreshToken)
+	if profileArn == "" {
+		log.Debugf("kiro executor: FetchProfileArn returned no profiles")
+		return ""
+	}
+
+	// Update auth
+	auth.Metadata["profile_arn"] = profileArn
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	auth.Attributes["profile_arn"] = profileArn
+
+	// Persist to file
+	if err := e.persistRefreshedAuth(auth); err != nil {
+		log.Warnf("kiro executor: failed to persist profileArn: %v", err)
+	} else {
+		log.Infof("kiro executor: fetched and saved profileArn: %s", profileArn)
+	}
+
+	return profileArn
 }
 
 // reloadAuthFromFile 从文件重新加载 auth 数据（方案 B: Fallback 机制）

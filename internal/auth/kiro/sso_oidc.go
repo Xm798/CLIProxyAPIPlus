@@ -450,7 +450,7 @@ func (c *SSOOIDCClient) LoginWithIDC(ctx context.Context, startURL, region strin
 
 			// Step 5: Get profile ARN from CodeWhisperer API
 			fmt.Println("Fetching profile information...")
-			profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
+			profileArn := c.FetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 
 			// Fetch user email
 			email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
@@ -857,10 +857,6 @@ func (c *SSOOIDCClient) LoginWithBuilderID(ctx context.Context) (*KiroTokenData,
 				log.Debugf("Failed to close browser: %v", err)
 			}
 
-			// Step 5: Get profile ARN from CodeWhisperer API
-			fmt.Println("Fetching profile information...")
-			profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
-
 			// Fetch user email (tries CodeWhisperer API first, then userinfo endpoint, then JWT parsing)
 			email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 			if email != "" {
@@ -872,7 +868,7 @@ func (c *SSOOIDCClient) LoginWithBuilderID(ctx context.Context) (*KiroTokenData,
 			return &KiroTokenData{
 				AccessToken:  tokenResp.AccessToken,
 				RefreshToken: tokenResp.RefreshToken,
-				ProfileArn:   profileArn,
+				ProfileArn:   "", // Builder ID has no profile
 				ExpiresAt:    expiresAt.Format(time.RFC3339),
 				AuthMethod:   "builder-id",
 				Provider:     "AWS",
@@ -953,22 +949,24 @@ func (c *SSOOIDCClient) tryUserInfoEndpoint(ctx context.Context, accessToken str
 	return ""
 }
 
-func (c *SSOOIDCClient) fetchProfileArn(ctx context.Context, accessToken, clientID string) string {
-	profileArn := c.tryListAvailableProfiles(ctx, accessToken, clientID)
+// FetchProfileArn fetches the profile ARN from ListAvailableProfiles API.
+// This is used to get profileArn for imported accounts that may not have it.
+func (c *SSOOIDCClient) FetchProfileArn(ctx context.Context, accessToken, clientID, refreshToken string) string {
+	profileArn := c.tryListAvailableProfiles(ctx, accessToken, clientID, refreshToken)
 	if profileArn != "" {
 		return profileArn
 	}
 	return c.tryListProfilesLegacy(ctx, accessToken)
 }
 
-func (c *SSOOIDCClient) tryListAvailableProfiles(ctx context.Context, accessToken, clientID string) string {
+func (c *SSOOIDCClient) tryListAvailableProfiles(ctx context.Context, accessToken, clientID, refreshToken string) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetKiroAPIEndpoint("")+"/ListAvailableProfiles", strings.NewReader("{}"))
 	if err != nil {
 		return ""
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	accountKey := GetAccountKey(clientID, "")
+	accountKey := GetAccountKey(clientID, refreshToken)
 	setRuntimeHeaders(req, accessToken, accountKey)
 
 	resp, err := c.httpClient.Do(req)
@@ -1454,10 +1452,6 @@ func (c *SSOOIDCClient) LoginWithBuilderIDAuthCode(ctx context.Context) (*KiroTo
 
 		fmt.Println("\n✓ Authentication successful!")
 
-		// Step 8: Get profile ARN
-		fmt.Println("Fetching profile information...")
-		profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
-
 		// Fetch user email (tries CodeWhisperer API first, then userinfo endpoint, then JWT parsing)
 		email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 		if email != "" {
@@ -1469,7 +1463,7 @@ func (c *SSOOIDCClient) LoginWithBuilderIDAuthCode(ctx context.Context) (*KiroTo
 		return &KiroTokenData{
 			AccessToken:  tokenResp.AccessToken,
 			RefreshToken: tokenResp.RefreshToken,
-			ProfileArn:   profileArn,
+			ProfileArn:   "", // Builder ID has no profile
 			ExpiresAt:    expiresAt.Format(time.RFC3339),
 			AuthMethod:   "builder-id",
 			Provider:     "AWS",
@@ -1574,7 +1568,7 @@ func (c *SSOOIDCClient) LoginWithIDCAuthCode(ctx context.Context, startURL, regi
 		fmt.Println("\n✓ Authentication successful!")
 
 		fmt.Println("Fetching profile information...")
-		profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
+		profileArn := c.FetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 
 		email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 		if email != "" {
