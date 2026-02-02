@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -106,7 +107,8 @@ var (
 	runtimeSDKVersions = []string{"1.0.0"}
 	// SDKVersions for generateAssistantResponse (streaming API)
 	streamingSDKVersions = []string{"1.0.27"}
-	osTypes              = []string{"darwin", "windows", "linux"}
+	// Valid OS types
+	osTypes = []string{"darwin", "windows", "linux"}
 	// OS versions
 	osVersions = map[string][]string{
 		"darwin":  {"25.2.0", "25.1.0", "25.0.0", "24.5.0", "24.4.0", "24.3.0"},
@@ -187,7 +189,7 @@ func (fm *FingerprintManager) generateFingerprint(tokenKey string) *Fingerprint 
 	return fm.generateRandom(tokenKey)
 }
 
-// generateFromConfig 从配置生成指纹，空字段使用非确定性随机回退 (重启后变化)
+// generateFromConfig 从配置生成指纹，空字段随机回退
 func (fm *FingerprintManager) generateFromConfig(tokenKey string) *Fingerprint {
 	cfg := fm.config
 
@@ -201,14 +203,9 @@ func (fm *FingerprintManager) generateFromConfig(tokenKey string) *Fingerprint {
 
 	osType := cfg.OSType
 	if osType == "" {
-		// Map real OS to valid fingerprint OS type
-		switch runtime.GOOS {
-		case "darwin":
-			osType = "darwin"
-		case "windows":
-			osType = "windows"
-		default:
-			osType = "linux"
+		osType = runtime.GOOS
+		if !slices.Contains(osTypes, osType) {
+			osType = osTypes[fm.rng.Intn(len(osTypes))]
 		}
 	}
 
@@ -238,15 +235,16 @@ func (fm *FingerprintManager) generateFromConfig(tokenKey string) *Fingerprint {
 }
 
 // generateRandom generates a deterministic fingerprint based on accountKey.
-// All fields are derived from the accountKey hash, ensuring consistency across runs.
 func (fm *FingerprintManager) generateRandom(accountKey string) *Fingerprint {
 	// Use accountKey hash as seed for deterministic random selection
 	hash := sha256.Sum256([]byte(accountKey))
 	seed := int64(binary.BigEndian.Uint64(hash[:8]))
 	rng := rand.New(rand.NewSource(seed))
 
-	// Deterministically select all fields
-	osType := osTypes[rng.Intn(len(osTypes))]
+	osType := runtime.GOOS
+	if !slices.Contains(osTypes, osType) {
+		osType = osTypes[rng.Intn(len(osTypes))]
+	}
 	osVersion := osVersions[osType][rng.Intn(len(osVersions[osType]))]
 
 	return &Fingerprint{
