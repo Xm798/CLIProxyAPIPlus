@@ -492,10 +492,26 @@ type IDCLoginOptions struct {
 
 // LoginWithMethodSelection prompts the user to select between Builder ID and IDC, then performs the login.
 // Options can be provided to pre-configure IDC parameters (startURL, region).
+// If StartURL is provided in opts, IDC flow is used directly without prompting.
 func (c *SSOOIDCClient) LoginWithMethodSelection(ctx context.Context, opts *IDCLoginOptions) (*KiroTokenData, error) {
 	fmt.Println("\n╔══════════════════════════════════════════════════════════╗")
 	fmt.Println("║              Kiro Authentication (AWS)                    ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════╝")
+
+	// If IDC options with StartURL are provided, skip method selection and use IDC directly
+	if opts != nil && opts.StartURL != "" {
+		region := opts.Region
+		if region == "" {
+			region = defaultIDCRegion
+		}
+		fmt.Printf("\n  Using IDC with Start URL: %s\n", opts.StartURL)
+		fmt.Printf("  Region: %s\n", region)
+
+		if opts.UseDeviceCode {
+			return c.LoginWithIDCAndOptions(ctx, opts.StartURL, region)
+		}
+		return c.LoginWithIDCAuthCode(ctx, opts.StartURL, region)
+	}
 
 	// Prompt for login method
 	options := []string{
@@ -1213,13 +1229,14 @@ func (c *SSOOIDCClient) startAuthCodeCallbackServer(ctx context.Context, expecte
 		}
 	}()
 
+	// Server cleanup is handled by the caller after receiving the result
 	go func() {
 		select {
 		case <-ctx.Done():
+			_ = server.Shutdown(context.Background())
 		case <-time.After(10 * time.Minute):
-		case <-resultChan:
+			_ = server.Shutdown(context.Background())
 		}
-		_ = server.Shutdown(context.Background())
 	}()
 
 	return redirectURI, resultChan, nil
