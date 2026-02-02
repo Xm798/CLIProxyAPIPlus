@@ -36,9 +36,61 @@ http://your-server:8080/v0/oauth/kiro
 ```
 
 提供基于浏览器的 Kiro (AWS CodeWhisperer) OAuth 认证流程，支持：
+
 - AWS Builder ID 登录
 - AWS Identity Center (IDC) 登录
 - 从 Kiro IDE 导入令牌
+
+### 命令行认证
+
+#### AWS Builder ID（默认）
+
+```bash
+# 授权码流程（自动浏览器回调）
+./CLIProxyAPI --kiro-aws-authcode
+
+# 设备码流程（手动输入验证码）
+./CLIProxyAPI --kiro-aws-login
+```
+
+#### AWS Identity Center (IdC)
+
+企业用户使用 AWS Identity Center：
+
+```bash
+# 授权码流程（自动浏览器回调）
+./CLIProxyAPI --kiro-idc-login --kiro-idc-start-url https://d-xxx.awsapps.com/start
+
+# 设备码流程（手动输入验证码）
+./CLIProxyAPI --kiro-idc-login --kiro-idc-start-url https://d-xxx.awsapps.com/start --kiro-idc-flow device
+
+# 指定 OIDC 区域（默认：us-east-1）
+./CLIProxyAPI --kiro-idc-login --kiro-idc-start-url https://d-xxx.awsapps.com/start --kiro-idc-region us-east-2
+```
+
+**IDC 选项说明：**
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `--kiro-idc-login` | 启用 IDC 登录模式 | - |
+| `--kiro-idc-start-url` | IDC Start URL（必填） | - |
+| `--kiro-idc-region` | OIDC 区域（用于登录和刷新 token） | `us-east-1` |
+| `--kiro-idc-flow` | 登录流程：`authcode` 或 `device` | `authcode` |
+
+#### Google OAuth 登录（不可用）
+
+> **注意：** 由于 AWS Cognito redirect_uri 限制，Google/GitHub 登录不支持第三方应用。请使用 AWS Builder ID 或从 Kiro IDE 导入 token。
+
+```bash
+./CLIProxyAPI --kiro-google-login
+```
+
+#### 从 Kiro IDE 导入
+
+如果已通过 Kiro IDE 登录：
+
+```bash
+./CLIProxyAPI --kiro-import
+```
 
 ## Docker 快速部署
 

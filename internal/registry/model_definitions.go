@@ -350,7 +350,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 	}
 }
 
-// GetKiroModels returns the Kiro (AWS CodeWhisperer) model definitions
+// GetKiroModels returns the Kiro model definitions
 func GetKiroModels() []*ModelInfo {
 	return []*ModelInfo{
 		// --- Base Models ---
@@ -466,7 +466,7 @@ func GetKiroModels() []*ModelInfo {
 	}
 }
 
-// GetAmazonQModels returns the Amazon Q (AWS CodeWhisperer) model definitions.
+// GetAmazonQModels returns the Amazon Q model definitions.
 // These models use the same API as Kiro and share the same executor.
 func GetAmazonQModels() []*ModelInfo {
 	return []*ModelInfo{

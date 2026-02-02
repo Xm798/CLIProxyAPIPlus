@@ -40,6 +40,57 @@ This provides a browser-based OAuth flow for Kiro (AWS CodeWhisperer) authentica
 - AWS Identity Center (IDC) login
 - Token import from Kiro IDE
 
+### CLI Authentication
+
+#### AWS Builder ID (Default)
+
+```bash
+# Authorization Code Flow (recommended, automatic browser callback)
+./CLIProxyAPI --kiro-aws-authcode
+
+# Device Code Flow (manual code entry)
+./CLIProxyAPI --kiro-aws-login
+```
+
+#### AWS Identity Center (IDC)
+
+For enterprise users with AWS Identity Center:
+
+```bash
+# Authorization Code Flow (default, automatic browser callback)
+./CLIProxyAPI --kiro-idc-login --kiro-idc-start-url https://d-xxx.awsapps.com/start
+
+# Device Code Flow (manual code entry, for headless environments)
+./CLIProxyAPI --kiro-idc-login --kiro-idc-start-url https://d-xxx.awsapps.com/start --kiro-idc-flow device
+
+# Specify OIDC region (default: us-east-1)
+./CLIProxyAPI --kiro-idc-login --kiro-idc-start-url https://d-xxx.awsapps.com/start --kiro-idc-region us-east-2
+```
+
+**IDC Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--kiro-idc-login` | Enable IDC login mode | - |
+| `--kiro-idc-start-url` | Your IDC Start URL (required) | - |
+| `--kiro-idc-region` | OIDC region for login and token refresh | `us-east-1` |
+| `--kiro-idc-flow` | Login flow: `authcode` or `device` | `authcode` |
+
+#### Google OAuth (Not Available)
+
+> **Note:** Google/GitHub login is not available for third-party applications due to AWS Cognito redirect_uri restrictions. Please use AWS Builder ID or import your token from Kiro IDE.
+
+```bash
+./CLIProxyAPI --kiro-google-login
+```
+
+#### Import from Kiro IDE
+
+If you've already logged in via Kiro IDE:
+
+```bash
+./CLIProxyAPI --kiro-import
+```
+
 ## Quick Deployment with Docker
 
 ### One-Command Deployment

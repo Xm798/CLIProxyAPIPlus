@@ -36,10 +36,12 @@ type KiroInferenceConfig struct {
 
 // KiroConversationState holds the conversation context
 type KiroConversationState struct {
-	ChatTriggerType string               `json:"chatTriggerType"` // Required: "MANUAL"
-	ConversationID  string               `json:"conversationId"`
-	CurrentMessage  KiroCurrentMessage   `json:"currentMessage"`
-	History         []KiroHistoryMessage `json:"history,omitempty"`
+	AgentContinuationID string               `json:"agentContinuationId,omitempty"`
+	AgentTaskType       string               `json:"agentTaskType,omitempty"`
+	ChatTriggerType     string               `json:"chatTriggerType"` // Required: "MANUAL"
+	ConversationID      string               `json:"conversationId"`
+	CurrentMessage      KiroCurrentMessage   `json:"currentMessage"`
+	History             []KiroHistoryMessage `json:"history,omitempty"`
 }
 
 // KiroCurrentMessage wraps the current user message
@@ -299,10 +301,12 @@ func BuildKiroPayloadFromOpenAI(openaiBody []byte, modelID, profileArn, origin s
 
 	payload := KiroPayload{
 		ConversationState: KiroConversationState{
-			ChatTriggerType: "MANUAL",
-			ConversationID:  uuid.New().String(),
-			CurrentMessage:  currentMessage,
-			History:         history,
+			AgentContinuationID: uuid.New().String(),
+			AgentTaskType:       "vibe",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      uuid.New().String(),
+			CurrentMessage:      currentMessage,
+			History:             history,
 		},
 		ProfileArn:      profileArn,
 		InferenceConfig: inferenceConfig,

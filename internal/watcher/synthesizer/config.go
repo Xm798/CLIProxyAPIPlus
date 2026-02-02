@@ -322,7 +322,7 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 	return out
 }
 
-// synthesizeKiroKeys creates Auth entries for Kiro (AWS CodeWhisperer) tokens.
+// synthesizeKiroKeys creates Auth entries for Kiro tokens.
 func (s *ConfigSynthesizer) synthesizeKiroKeys(ctx *SynthesisContext) []*coreauth.Auth {
 	cfg := ctx.Config
 	now := ctx.Now
