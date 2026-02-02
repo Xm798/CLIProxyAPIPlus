@@ -374,7 +374,7 @@ func (h *OAuthWebHandler) pollForToken(ctx context.Context, session *webAuthSess
 
 			expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 			profileArn := session.ssoClient.fetchProfileArn(ctx, tokenResp.AccessToken, session.clientID)
-			email := FetchUserEmailWithFallback(ctx, h.cfg, tokenResp.AccessToken, tokenResp.RefreshToken)
+			email := FetchUserEmailWithFallback(ctx, h.cfg, tokenResp.AccessToken, session.clientID, tokenResp.RefreshToken)
 
 			tokenData := &KiroTokenData{
 					AccessToken:  tokenResp.AccessToken,

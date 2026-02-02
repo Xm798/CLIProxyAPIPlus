@@ -194,6 +194,11 @@ func initGlobalFingerprintConfig(cfg *config.Config) {
 	log.Debug("kiro: global fingerprint config loaded")
 }
 
+// InitFingerprintConfig initializes the global fingerprint config from application config.
+func InitFingerprintConfig(cfg *config.Config) {
+	initGlobalFingerprintConfig(cfg)
+}
+
 // StopGlobalRefreshManager 停止全局刷新管理器
 func StopGlobalRefreshManager() {
 	if globalRefreshManager != nil {

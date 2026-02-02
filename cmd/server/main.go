@@ -514,27 +514,33 @@ func main() {
 		// Users can explicitly override with --no-incognito
 		// Note: This config mutation is safe - auth commands exit after completion
 		// and don't share config with StartService (which is in the else branch)
+		kiro.InitFingerprintConfig(cfg)
 		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
 		cmd.DoKiroLogin(cfg, options)
 	} else if kiroGoogleLogin {
 		// For Kiro auth, default to incognito mode for multi-account support
 		// Users can explicitly override with --no-incognito
 		// Note: This config mutation is safe - auth commands exit after completion
+		kiro.InitFingerprintConfig(cfg)
 		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
 		cmd.DoKiroGoogleLogin(cfg, options)
 	} else if kiroAWSLogin {
 		// For Kiro auth, default to incognito mode for multi-account support
 		// Users can explicitly override with --no-incognito
+		kiro.InitFingerprintConfig(cfg)
 		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
 		cmd.DoKiroAWSLogin(cfg, options)
 	} else if kiroAWSAuthCode {
 		// For Kiro auth with authorization code flow (better UX)
+		kiro.InitFingerprintConfig(cfg)
 		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
 		cmd.DoKiroAWSAuthCodeLogin(cfg, options)
 	} else if kiroIDCLogin {
+		kiro.InitFingerprintConfig(cfg)
 		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
 		cmd.DoKiroIDCLogin(cfg, options, kiroIDCStartURL, kiroIDCRegion, kiroIDCFlow)
 	} else if kiroImport {
+		kiro.InitFingerprintConfig(cfg)
 		cmd.DoKiroImport(cfg, options)
 	} else {
 		// In cloud deploy mode without config file, just wait for shutdown signals

@@ -453,7 +453,7 @@ func (c *SSOOIDCClient) LoginWithIDC(ctx context.Context, startURL, region strin
 			profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
 
 			// Fetch user email
-			email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, tokenResp.RefreshToken)
+			email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 			if email != "" {
 				fmt.Printf("  Logged in as: %s\n", email)
 			}
@@ -862,7 +862,7 @@ func (c *SSOOIDCClient) LoginWithBuilderID(ctx context.Context) (*KiroTokenData,
 			profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
 
 			// Fetch user email (tries CodeWhisperer API first, then userinfo endpoint, then JWT parsing)
-			email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, tokenResp.RefreshToken)
+			email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 			if email != "" {
 				fmt.Printf("  Logged in as: %s\n", email)
 			}
@@ -1459,7 +1459,7 @@ func (c *SSOOIDCClient) LoginWithBuilderIDAuthCode(ctx context.Context) (*KiroTo
 		profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
 
 		// Fetch user email (tries CodeWhisperer API first, then userinfo endpoint, then JWT parsing)
-		email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, tokenResp.RefreshToken)
+		email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 		if email != "" {
 			fmt.Printf("  Logged in as: %s\n", email)
 		}
@@ -1576,7 +1576,7 @@ func (c *SSOOIDCClient) LoginWithIDCAuthCode(ctx context.Context, startURL, regi
 		fmt.Println("Fetching profile information...")
 		profileArn := c.fetchProfileArn(ctx, tokenResp.AccessToken, regResp.ClientID)
 
-		email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, tokenResp.RefreshToken)
+		email := FetchUserEmailWithFallback(ctx, c.cfg, tokenResp.AccessToken, regResp.ClientID, tokenResp.RefreshToken)
 		if email != "" {
 			fmt.Printf("  Logged in as: %s\n", email)
 		}

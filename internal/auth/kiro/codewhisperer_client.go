@@ -64,7 +64,7 @@ func NewCodeWhispererClient(cfg *config.Config, machineID string) *CodeWhisperer
 
 // GetUsageLimits fetches usage limits and user info from CodeWhisperer API.
 // This is the recommended way to get user email after login.
-func (c *CodeWhispererClient) GetUsageLimits(ctx context.Context, accessToken, refreshToken, profileArn string) (*UsageLimitsResponse, error) {
+func (c *CodeWhispererClient) GetUsageLimits(ctx context.Context, accessToken, clientID, refreshToken, profileArn string) (*UsageLimitsResponse, error) {
 	queryParams := map[string]string{
 		"origin":       "AI_EDITOR",
 		"resourceType": "AGENTIC_REQUEST",
@@ -83,8 +83,7 @@ func (c *CodeWhispererClient) GetUsageLimits(ctx context.Context, accessToken, r
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Use refreshToken for accountKey since we don't have clientID in this context
-	accountKey := GetAccountKey("", refreshToken)
+	accountKey := GetAccountKey(clientID, refreshToken)
 	setRuntimeHeaders(req, accessToken, accountKey)
 
 	log.Debugf("codewhisperer: GET %s", url)
@@ -116,8 +115,8 @@ func (c *CodeWhispererClient) GetUsageLimits(ctx context.Context, accessToken, r
 
 // FetchUserEmailFromAPI fetches user email using CodeWhisperer getUsageLimits API.
 // This is more reliable than JWT parsing as it uses the official API.
-func (c *CodeWhispererClient) FetchUserEmailFromAPI(ctx context.Context, accessToken, refreshToken string) string {
-	resp, err := c.GetUsageLimits(ctx, accessToken, refreshToken, "")
+func (c *CodeWhispererClient) FetchUserEmailFromAPI(ctx context.Context, accessToken, clientID, refreshToken string) string {
+	resp, err := c.GetUsageLimits(ctx, accessToken, clientID, refreshToken, "")
 	if err != nil {
 		log.Debugf("codewhisperer: failed to get usage limits: %v", err)
 		return ""
@@ -134,10 +133,10 @@ func (c *CodeWhispererClient) FetchUserEmailFromAPI(ctx context.Context, accessT
 
 // FetchUserEmailWithFallback fetches user email with multiple fallback methods.
 // Priority: 1. CodeWhisperer API  2. userinfo endpoint  3. JWT parsing
-func FetchUserEmailWithFallback(ctx context.Context, cfg *config.Config, accessToken, refreshToken string) string {
+func FetchUserEmailWithFallback(ctx context.Context, cfg *config.Config, accessToken, clientID, refreshToken string) string {
 	// Method 1: Try CodeWhisperer API (most reliable)
 	cwClient := NewCodeWhispererClient(cfg, "")
-	email := cwClient.FetchUserEmailFromAPI(ctx, accessToken, refreshToken)
+	email := cwClient.FetchUserEmailFromAPI(ctx, accessToken, clientID, refreshToken)
 	if email != "" {
 		return email
 	}
