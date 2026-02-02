@@ -2,27 +2,91 @@ package kiro
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
+	"runtime"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// Fingerprint 多维度指纹信息
+// oidcFingerprintKey is the fingerprint key for OIDC requests.
+// OIDC happens before authentication, so no account-specific key is available.
+const oidcFingerprintKey = "oidc-session"
+
+// SetOIDCHeaders sets headers for OIDC API requests.
+func SetOIDCHeaders(req *http.Request) {
+	fp := GlobalFingerprintManager().GetFingerprint(oidcFingerprintKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-amz-user-agent", fmt.Sprintf("aws-sdk-js/%s KiroIDE", fp.OIDCSDKVersion))
+	req.Header.Set("User-Agent", fmt.Sprintf(
+		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/%s#%s m/E KiroIDE",
+		fp.OIDCSDKVersion, fp.OSType, fp.OSVersion, fp.NodeVersion, "sso-oidc", fp.OIDCSDKVersion))
+	req.Header.Set("amz-sdk-invocation-id", uuid.New().String())
+	req.Header.Set("amz-sdk-request", "attempt=1; max=4")
+}
+
+// setRuntimeHeaders sets headers for Kiro runtime API requests.
+// accountKey is used to look up the fingerprint for this account.
+func setRuntimeHeaders(req *http.Request, accessToken string, accountKey string) {
+	fp := GlobalFingerprintManager().GetFingerprint(accountKey)
+	machineID := fp.KiroHash
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("x-amz-user-agent", fmt.Sprintf("aws-sdk-js/%s KiroIDE-%s-%s",
+		fp.RuntimeSDKVersion, fp.KiroVersion, machineID))
+	req.Header.Set("User-Agent", fmt.Sprintf(
+		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererruntime#%s m/N,E KiroIDE-%s-%s",
+		fp.RuntimeSDKVersion, fp.OSType, fp.OSVersion, fp.NodeVersion, fp.RuntimeSDKVersion,
+		fp.KiroVersion, machineID))
+	req.Header.Set("amz-sdk-invocation-id", uuid.New().String())
+	req.Header.Set("amz-sdk-request", "attempt=1; max=1")
+}
+
+// buildURL constructs a URL with query parameters.
+func buildURL(endpoint, path string, queryParams map[string]string) string {
+	fullURL := fmt.Sprintf("%s/%s", endpoint, path)
+	if len(queryParams) > 0 {
+		values := url.Values{}
+		for key, value := range queryParams {
+			if value == "" {
+				continue
+			}
+			values.Set(key, value)
+		}
+		if encoded := values.Encode(); encoded != "" {
+			fullURL = fullURL + "?" + encoded
+		}
+	}
+	return fullURL
+}
+
+// Fingerprint 多维度指纹信息 (用于运行时请求伪装)
 type Fingerprint struct {
-	SDKVersion          string // 1.0.20-1.0.27
+	OIDCSDKVersion      string // 3.7xx (AWS SDK JS)
+	RuntimeSDKVersion   string // 1.0.x (runtime API)
+	StreamingSDKVersion string // 1.0.x (streaming API)
 	OSType              string // darwin/windows/linux
-	OSVersion           string // 10.0.22621
-	NodeVersion         string // 18.x/20.x/22.x
-	KiroVersion         string // 0.3.x-0.8.x
+	OSVersion           string
+	NodeVersion         string
+	KiroVersion         string
 	KiroHash            string // SHA256
-	AcceptLanguage      string
-	ScreenResolution    string // 1920x1080
-	ColorDepth          int    // 24
-	HardwareConcurrency int    // CPU 核心数
-	TimezoneOffset      int
+}
+
+// FingerprintConfig 外部指纹配置
+type FingerprintConfig struct {
+	OIDCSDKVersion      string
+	RuntimeSDKVersion   string
+	StreamingSDKVersion string
+	OSType              string
+	OSVersion           string
+	NodeVersion         string
+	KiroVersion         string
+	KiroHash            string
 }
 
 // FingerprintManager 指纹管理器
@@ -30,47 +94,60 @@ type FingerprintManager struct {
 	mu           sync.RWMutex
 	fingerprints map[string]*Fingerprint // tokenKey -> fingerprint
 	rng          *rand.Rand
+	config       *FingerprintConfig // External config (Optional)
 }
 
 var (
-	sdkVersions = []string{
-		"1.0.20", "1.0.21", "1.0.22", "1.0.23",
-		"1.0.24", "1.0.25", "1.0.26", "1.0.27",
+	// SDK versions
+	oidcSDKVersions = []string{
+		"3.738.0", "3.737.0", "3.736.0", "3.735.0",
 	}
-	osTypes = []string{"darwin", "windows", "linux"}
+	// SDKVersions for getUsageLimits/ListAvailableModels/GetProfile (runtime API)
+	runtimeSDKVersions = []string{"1.0.0"}
+	// SDKVersions for generateAssistantResponse (streaming API)
+	streamingSDKVersions = []string{"1.0.27"}
+	osTypes              = []string{"darwin", "windows", "linux"}
+	// OS versions
 	osVersions = map[string][]string{
-		"darwin":  {"14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"},
-		"windows": {"10.0.19041", "10.0.19042", "10.0.19043", "10.0.19044", "10.0.22621", "10.0.22631"},
-		"linux":   {"5.15.0", "6.1.0", "6.2.0", "6.5.0", "6.6.0", "6.8.0"},
+		"darwin":  {"25.2.0", "25.1.0", "25.0.0", "24.5.0", "24.4.0", "24.3.0"},
+		"windows": {"10.0.26200", "10.0.26100", "10.0.22631", "10.0.22621", "10.0.19045"},
+		"linux":   {"6.12.0", "6.11.0", "6.8.0", "6.6.0", "6.5.0", "6.1.0"},
 	}
+	// Node versions
 	nodeVersions = []string{
-		"18.17.0", "18.18.0", "18.19.0", "18.20.0",
-		"20.9.0", "20.10.0", "20.11.0", "20.12.0", "20.13.0",
-		"22.0.0", "22.1.0", "22.2.0", "22.3.0",
+		"22.21.1", "22.21.0", "22.20.0", "22.19.0", "22.18.0",
+		"20.18.0", "20.17.0", "20.16.0",
 	}
+	// Kiro IDE versions
 	kiroVersions = []string{
-		"0.3.0", "0.3.1", "0.4.0", "0.4.1", "0.5.0", "0.5.1",
-		"0.6.0", "0.6.1", "0.7.0", "0.7.1", "0.8.0", "0.8.1",
+		"0.8.206", "0.8.140", "0.8.135", "0.8.86", // 0.8.x (Jan 2026)
 	}
-	acceptLanguages = []string{
-		"en-US,en;q=0.9",
-		"en-GB,en;q=0.9",
-		"zh-CN,zh;q=0.9,en;q=0.8",
-		"zh-TW,zh;q=0.9,en;q=0.8",
-		"ja-JP,ja;q=0.9,en;q=0.8",
-		"ko-KR,ko;q=0.9,en;q=0.8",
-		"de-DE,de;q=0.9,en;q=0.8",
-		"fr-FR,fr;q=0.9,en;q=0.8",
-	}
-	screenResolutions = []string{
-		"1920x1080", "2560x1440", "3840x2160",
-		"1366x768", "1440x900", "1680x1050",
-		"2560x1600", "3440x1440",
-	}
-	colorDepths          = []int{24, 32}
-	hardwareConcurrencies = []int{4, 6, 8, 10, 12, 16, 20, 24, 32}
-	timezoneOffsets      = []int{-480, -420, -360, -300, -240, 0, 60, 120, 480, 540}
+	// Global singleton
+	globalFingerprintManager     *FingerprintManager
+	globalFingerprintManagerOnce sync.Once
 )
+
+// GlobalFingerprintManager 返回全局单例
+func GlobalFingerprintManager() *FingerprintManager {
+	globalFingerprintManagerOnce.Do(func() {
+		globalFingerprintManager = NewFingerprintManager()
+	})
+	return globalFingerprintManager
+}
+
+// SetGlobalFingerprintConfig 设置全局指纹配置
+func SetGlobalFingerprintConfig(cfg *FingerprintConfig) {
+	GlobalFingerprintManager().SetConfig(cfg)
+}
+
+// SetConfig 设置指纹配置
+func (fm *FingerprintManager) SetConfig(cfg *FingerprintConfig) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	fm.config = cfg
+	// 清空已缓存的指纹，使用新配置重新生成
+	fm.fingerprints = make(map[string]*Fingerprint)
+}
 
 // NewFingerprintManager 创建指纹管理器
 func NewFingerprintManager() *FingerprintManager {
@@ -103,83 +180,121 @@ func (fm *FingerprintManager) GetFingerprint(tokenKey string) *Fingerprint {
 
 // generateFingerprint 生成新的指纹
 func (fm *FingerprintManager) generateFingerprint(tokenKey string) *Fingerprint {
-	osType := fm.randomChoice(osTypes)
-	osVersion := fm.randomChoice(osVersions[osType])
-	kiroVersion := fm.randomChoice(kiroVersions)
+	// 如果有外部配置，优先使用配置值
+	if fm.config != nil {
+		return fm.generateFromConfig(tokenKey)
+	}
+	return fm.generateRandom(tokenKey)
+}
 
-	fp := &Fingerprint{
-		SDKVersion:          fm.randomChoice(sdkVersions),
-		OSType:              osType,
-		OSVersion:           osVersion,
-		NodeVersion:         fm.randomChoice(nodeVersions),
-		KiroVersion:         kiroVersion,
-		AcceptLanguage:      fm.randomChoice(acceptLanguages),
-		ScreenResolution:    fm.randomChoice(screenResolutions),
-		ColorDepth:          fm.randomIntChoice(colorDepths),
-		HardwareConcurrency: fm.randomIntChoice(hardwareConcurrencies),
-		TimezoneOffset:      fm.randomIntChoice(timezoneOffsets),
+// generateFromConfig 从配置生成指纹，空字段使用非确定性随机回退 (重启后变化)
+func (fm *FingerprintManager) generateFromConfig(tokenKey string) *Fingerprint {
+	cfg := fm.config
+
+	// Helper: config value or random selection
+	configOrRandom := func(configVal string, choices []string) string {
+		if configVal != "" {
+			return configVal
+		}
+		return choices[fm.rng.Intn(len(choices))]
 	}
 
-	fp.KiroHash = fm.generateKiroHash(tokenKey, kiroVersion, osType)
-	return fp
+	osType := cfg.OSType
+	if osType == "" {
+		// Map real OS to valid fingerprint OS type
+		switch runtime.GOOS {
+		case "darwin":
+			osType = "darwin"
+		case "windows":
+			osType = "windows"
+		default:
+			osType = "linux"
+		}
+	}
+
+	osVersion := cfg.OSVersion
+	if osVersion == "" {
+		if versions, ok := osVersions[osType]; ok {
+			osVersion = versions[fm.rng.Intn(len(versions))]
+		}
+	}
+
+	kiroHash := cfg.KiroHash
+	if kiroHash == "" {
+		hash := sha256.Sum256([]byte(tokenKey))
+		kiroHash = hex.EncodeToString(hash[:])
+	}
+
+	return &Fingerprint{
+		OIDCSDKVersion:      configOrRandom(cfg.OIDCSDKVersion, oidcSDKVersions),
+		RuntimeSDKVersion:   configOrRandom(cfg.RuntimeSDKVersion, runtimeSDKVersions),
+		StreamingSDKVersion: configOrRandom(cfg.StreamingSDKVersion, streamingSDKVersions),
+		OSType:              osType,
+		OSVersion:           osVersion,
+		NodeVersion:         configOrRandom(cfg.NodeVersion, nodeVersions),
+		KiroVersion:         configOrRandom(cfg.KiroVersion, kiroVersions),
+		KiroHash:            kiroHash,
+	}
 }
 
-// generateKiroHash 生成 Kiro Hash
-func (fm *FingerprintManager) generateKiroHash(tokenKey, kiroVersion, osType string) string {
-	data := fmt.Sprintf("%s:%s:%s:%d", tokenKey, kiroVersion, osType, time.Now().UnixNano())
-	hash := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hash[:])
+// generateRandom generates a deterministic fingerprint based on accountKey.
+// All fields are derived from the accountKey hash, ensuring consistency across runs.
+func (fm *FingerprintManager) generateRandom(accountKey string) *Fingerprint {
+	// Use accountKey hash as seed for deterministic random selection
+	hash := sha256.Sum256([]byte(accountKey))
+	seed := int64(binary.BigEndian.Uint64(hash[:8]))
+	rng := rand.New(rand.NewSource(seed))
+
+	// Deterministically select all fields
+	osType := osTypes[rng.Intn(len(osTypes))]
+	osVersion := osVersions[osType][rng.Intn(len(osVersions[osType]))]
+
+	return &Fingerprint{
+		OIDCSDKVersion:      oidcSDKVersions[rng.Intn(len(oidcSDKVersions))],
+		RuntimeSDKVersion:   runtimeSDKVersions[rng.Intn(len(runtimeSDKVersions))],
+		StreamingSDKVersion: streamingSDKVersions[rng.Intn(len(streamingSDKVersions))],
+		OSType:              osType,
+		OSVersion:           osVersion,
+		NodeVersion:         nodeVersions[rng.Intn(len(nodeVersions))],
+		KiroVersion:         kiroVersions[rng.Intn(len(kiroVersions))],
+		KiroHash:            hex.EncodeToString(hash[:]),
+	}
 }
 
-// randomChoice 随机选择字符串
-func (fm *FingerprintManager) randomChoice(choices []string) string {
-	return choices[fm.rng.Intn(len(choices))]
+// GenerateAccountKey generates a stable account key from a seed string.
+// Returns a 16-character hex string derived from SHA256 hash.
+func GenerateAccountKey(seed string) string {
+	hash := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(hash[:8])
 }
 
-// randomIntChoice 随机选择整数
-func (fm *FingerprintManager) randomIntChoice(choices []int) int {
-	return choices[fm.rng.Intn(len(choices))]
+// GetAccountKey returns an account key based on available authentication info.
+// This ensures a consistent fingerprint per login session.
+func GetAccountKey(clientID, refreshToken string) string {
+	// 1. Prefer ClientID
+	if clientID != "" {
+		return GenerateAccountKey(clientID)
+	}
+
+	// 2. Fallback to RefreshToken
+	if refreshToken != "" {
+		return GenerateAccountKey(refreshToken)
+	}
+
+	// 3. Random fallback
+	return GenerateAccountKey(uuid.New().String())
 }
 
-// ApplyToRequest 将指纹信息应用到 HTTP 请求头
-func (fp *Fingerprint) ApplyToRequest(req *http.Request) {
-	req.Header.Set("X-Kiro-SDK-Version", fp.SDKVersion)
-	req.Header.Set("X-Kiro-OS-Type", fp.OSType)
-	req.Header.Set("X-Kiro-OS-Version", fp.OSVersion)
-	req.Header.Set("X-Kiro-Node-Version", fp.NodeVersion)
-	req.Header.Set("X-Kiro-Version", fp.KiroVersion)
-	req.Header.Set("X-Kiro-Hash", fp.KiroHash)
-	req.Header.Set("Accept-Language", fp.AcceptLanguage)
-	req.Header.Set("X-Screen-Resolution", fp.ScreenResolution)
-	req.Header.Set("X-Color-Depth", fmt.Sprintf("%d", fp.ColorDepth))
-	req.Header.Set("X-Hardware-Concurrency", fmt.Sprintf("%d", fp.HardwareConcurrency))
-	req.Header.Set("X-Timezone-Offset", fmt.Sprintf("%d", fp.TimezoneOffset))
-}
-
-// RemoveFingerprint 移除 Token 关联的指纹
-func (fm *FingerprintManager) RemoveFingerprint(tokenKey string) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-	delete(fm.fingerprints, tokenKey)
-}
-
-// Count 返回当前管理的指纹数量
-func (fm *FingerprintManager) Count() int {
-	fm.mu.RLock()
-	defer fm.mu.RUnlock()
-	return len(fm.fingerprints)
-}
-
-// BuildUserAgent 构建 User-Agent 字符串 (Kiro IDE 风格)
+// BuildUserAgent 构建 User-Agent 字符串
 // 格式: aws-sdk-js/{SDKVersion} ua/2.1 os/{OSType}#{OSVersion} lang/js md/nodejs#{NodeVersion} api/codewhispererstreaming#{SDKVersion} m/E KiroIDE-{KiroVersion}-{KiroHash}
 func (fp *Fingerprint) BuildUserAgent() string {
 	return fmt.Sprintf(
 		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererstreaming#%s m/E KiroIDE-%s-%s",
-		fp.SDKVersion,
+		fp.StreamingSDKVersion,
 		fp.OSType,
 		fp.OSVersion,
 		fp.NodeVersion,
-		fp.SDKVersion,
+		fp.StreamingSDKVersion,
 		fp.KiroVersion,
 		fp.KiroHash,
 	)
@@ -190,7 +305,7 @@ func (fp *Fingerprint) BuildUserAgent() string {
 func (fp *Fingerprint) BuildAmzUserAgent() string {
 	return fmt.Sprintf(
 		"aws-sdk-js/%s KiroIDE-%s-%s",
-		fp.SDKVersion,
+		fp.StreamingSDKVersion,
 		fp.KiroVersion,
 		fp.KiroHash,
 	)

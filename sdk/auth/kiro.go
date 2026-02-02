@@ -126,14 +126,14 @@ func (a *KiroAuthenticator) createAuthRecord(tokenData *kiroauth.KiroTokenData, 
 	}
 
 	record := &coreauth.Auth{
-		ID:        fileName,
-		Provider:  "kiro",
-		FileName:  fileName,
-		Label:     label,
-		Status:    coreauth.StatusActive,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Metadata:  metadata,
+		ID:         fileName,
+		Provider:   "kiro",
+		FileName:   fileName,
+		Label:      label,
+		Status:     coreauth.StatusActive,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Metadata:   metadata,
 		Attributes: attributes,
 		// NextRefreshAfter: 20 minutes before expiry
 		NextRefreshAfter: expiresAt.Add(-20 * time.Minute),
@@ -150,14 +150,30 @@ func (a *KiroAuthenticator) createAuthRecord(tokenData *kiroauth.KiroTokenData, 
 
 // Login performs OAuth login for Kiro with AWS (Builder ID or IDC).
 // This shows a method selection prompt and handles both flows.
+// IDC options can be passed via opts.Metadata: "start-url", "region", "flow" (authcode/device).
 func (a *KiroAuthenticator) Login(ctx context.Context, cfg *config.Config, opts *LoginOptions) (*coreauth.Auth, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("kiro auth: configuration is required")
 	}
 
+	// Build IDC options from metadata if provided
+	var idcOpts *kiroauth.IDCLoginOptions
+	if opts != nil && opts.Metadata != nil {
+		startURL := opts.Metadata["start-url"]
+		region := opts.Metadata["region"]
+		flow := opts.Metadata["flow"]
+		if startURL != "" || region != "" || flow != "" {
+			idcOpts = &kiroauth.IDCLoginOptions{
+				StartURL:      startURL,
+				Region:        region,
+				UseDeviceCode: flow == "device",
+			}
+		}
+	}
+
 	// Use the unified method selection flow (Builder ID or IDC)
 	ssoClient := kiroauth.NewSSOOIDCClient(cfg)
-	tokenData, err := ssoClient.LoginWithMethodSelection(ctx)
+	tokenData, err := ssoClient.LoginWithMethodSelection(ctx, idcOpts)
 	if err != nil {
 		return nil, fmt.Errorf("login failed: %w", err)
 	}

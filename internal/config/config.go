@@ -78,8 +78,12 @@ type Config struct {
 	// GeminiKey defines Gemini API key configurations with optional routing overrides.
 	GeminiKey []GeminiKey `yaml:"gemini-api-key" json:"gemini-api-key"`
 
-	// KiroKey defines a list of Kiro (AWS CodeWhisperer) configurations.
+	// KiroKey defines a list of Kiro configurations.
 	KiroKey []KiroKey `yaml:"kiro" json:"kiro"`
+
+	// KiroFingerprint defines a global fingerprint configuration for all Kiro requests.
+	// When set, all Kiro requests will use this fixed fingerprint instead of random generation.
+	KiroFingerprint *KiroFingerprintConfig `yaml:"kiro-fingerprint,omitempty" json:"kiro-fingerprint,omitempty"`
 
 	// KiroPreferredEndpoint sets the global default preferred endpoint for all Kiro providers.
 	// Values: "ide" (default, CodeWhisperer) or "cli" (Amazon Q).
@@ -426,7 +430,7 @@ type GeminiModel struct {
 func (m GeminiModel) GetName() string  { return m.Name }
 func (m GeminiModel) GetAlias() string { return m.Alias }
 
-// KiroKey represents the configuration for Kiro (AWS CodeWhisperer) authentication.
+// KiroKey represents the configuration for Kiro authentication.
 type KiroKey struct {
 	// TokenFile is the path to the Kiro token file (default: ~/.aws/sso/cache/kiro-auth-token.json)
 	TokenFile string `yaml:"token-file,omitempty" json:"token-file,omitempty"`
@@ -440,8 +444,12 @@ type KiroKey struct {
 	// ProfileArn is the AWS CodeWhisperer profile ARN.
 	ProfileArn string `yaml:"profile-arn,omitempty" json:"profile-arn,omitempty"`
 
-	// Region is the AWS region (default: us-east-1).
+	// Region is the OIDC region for IDC login and token refresh (default: us-east-1).
 	Region string `yaml:"region,omitempty" json:"region,omitempty"`
+
+	// StartURL is the AWS Identity Center start URL for IDC authentication.
+	// Can be preset to avoid interactive input during login.
+	StartURL string `yaml:"start-url,omitempty" json:"start-url,omitempty"`
 
 	// ProxyURL optionally overrides the global proxy for this configuration.
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
@@ -453,6 +461,35 @@ type KiroKey struct {
 	// PreferredEndpoint sets the preferred Kiro API endpoint/quota.
 	// Values: "codewhisperer" (default, IDE quota) or "amazonq" (CLI quota).
 	PreferredEndpoint string `yaml:"preferred-endpoint,omitempty" json:"preferred-endpoint,omitempty"`
+}
+
+// KiroFingerprintConfig defines a global fingerprint configuration for Kiro requests.
+// When configured, all Kiro requests will use this fixed fingerprint instead of random generation.
+// Empty fields will fall back to random selection from built-in pools.
+type KiroFingerprintConfig struct {
+	// OIDCSDKVersion is the AWS SDK JS version for OIDC requests (e.g., "3.738.0").
+	OIDCSDKVersion string `yaml:"oidc-sdk-version,omitempty" json:"oidc-sdk-version,omitempty"`
+
+	// RuntimeSDKVersion is the SDK version for runtime API requests (e.g., "1.0.0").
+	RuntimeSDKVersion string `yaml:"runtime-sdk-version,omitempty" json:"runtime-sdk-version,omitempty"`
+
+	// StreamingSDKVersion is the SDK version for streaming API requests (e.g., "1.0.27").
+	StreamingSDKVersion string `yaml:"streaming-sdk-version,omitempty" json:"streaming-sdk-version,omitempty"`
+
+	// OSType is the operating system type (darwin, windows, linux).
+	OSType string `yaml:"os-type,omitempty" json:"os-type,omitempty"`
+
+	// OSVersion is the operating system version (e.g., "25.2.0" for macOS).
+	OSVersion string `yaml:"os-version,omitempty" json:"os-version,omitempty"`
+
+	// NodeVersion is the Node.js version (e.g., "22.21.1").
+	NodeVersion string `yaml:"node-version,omitempty" json:"node-version,omitempty"`
+
+	// KiroVersion is the Kiro IDE version (e.g., "0.8.206").
+	KiroVersion string `yaml:"kiro-version,omitempty" json:"kiro-version,omitempty"`
+
+	// KiroHash is the machine identifier hash. If empty, derived from token.
+	KiroHash string `yaml:"kiro-hash,omitempty" json:"kiro-hash,omitempty"`
 }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility

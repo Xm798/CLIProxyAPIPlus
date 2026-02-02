@@ -164,12 +164,34 @@ func (m *RefreshManager) SetOnTokenRefreshed(callback func(tokenID string, token
 
 // InitializeAndStart 初始化并启动后台刷新（便捷方法）
 func InitializeAndStart(baseDir string, cfg *config.Config) {
+	// 初始化全局指纹配置
+	initGlobalFingerprintConfig(cfg)
+
 	manager := GetRefreshManager()
 	if err := manager.Initialize(baseDir, cfg); err != nil {
 		log.Errorf("refresh manager: initialization failed: %v", err)
 		return
 	}
 	manager.Start()
+}
+
+// initGlobalFingerprintConfig 从配置初始化全局指纹
+func initGlobalFingerprintConfig(cfg *config.Config) {
+	if cfg == nil || cfg.KiroFingerprint == nil {
+		return
+	}
+	fpCfg := cfg.KiroFingerprint
+	SetGlobalFingerprintConfig(&FingerprintConfig{
+		OIDCSDKVersion:      fpCfg.OIDCSDKVersion,
+		RuntimeSDKVersion:   fpCfg.RuntimeSDKVersion,
+		StreamingSDKVersion: fpCfg.StreamingSDKVersion,
+		OSType:              fpCfg.OSType,
+		OSVersion:           fpCfg.OSVersion,
+		NodeVersion:         fpCfg.NodeVersion,
+		KiroVersion:         fpCfg.KiroVersion,
+		KiroHash:            fpCfg.KiroHash,
+	})
+	log.Debug("kiro: global fingerprint config loaded")
 }
 
 // StopGlobalRefreshManager 停止全局刷新管理器
