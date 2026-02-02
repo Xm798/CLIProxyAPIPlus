@@ -81,6 +81,10 @@ func main() {
 	var kiroGoogleLogin bool
 	var kiroAWSLogin bool
 	var kiroAWSAuthCode bool
+	var kiroIDCLogin bool
+	var kiroIDCStartURL string
+	var kiroIDCRegion string
+	var kiroIDCFlow string
 	var kiroImport bool
 	var githubCopilotLogin bool
 	var projectID string
@@ -106,6 +110,10 @@ func main() {
 	flag.BoolVar(&kiroGoogleLogin, "kiro-google-login", false, "Login to Kiro using Google OAuth (same as --kiro-login)")
 	flag.BoolVar(&kiroAWSLogin, "kiro-aws-login", false, "Login to Kiro using AWS Builder ID (device code flow)")
 	flag.BoolVar(&kiroAWSAuthCode, "kiro-aws-authcode", false, "Login to Kiro using AWS Builder ID (authorization code flow, better UX)")
+	flag.BoolVar(&kiroIDCLogin, "kiro-idc-login", false, "Login to Kiro using AWS Identity Center (IDC)")
+	flag.StringVar(&kiroIDCStartURL, "kiro-idc-start-url", "", "IDC Start URL (e.g., https://d-xxx.awsapps.com/start)")
+	flag.StringVar(&kiroIDCRegion, "kiro-idc-region", "us-east-1", "OIDC region for IDC login and token refresh")
+	flag.StringVar(&kiroIDCFlow, "kiro-idc-flow", "authcode", "IDC login flow: authcode (default) or device")
 	flag.BoolVar(&kiroImport, "kiro-import", false, "Import Kiro token from Kiro IDE (~/.aws/sso/cache/kiro-auth-token.json)")
 	flag.BoolVar(&githubCopilotLogin, "github-copilot-login", false, "Login to GitHub Copilot using device flow")
 	flag.StringVar(&projectID, "project_id", "", "Project ID (Gemini only, not required)")
@@ -523,6 +531,9 @@ func main() {
 		// For Kiro auth with authorization code flow (better UX)
 		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
 		cmd.DoKiroAWSAuthCodeLogin(cfg, options)
+	} else if kiroIDCLogin {
+		setKiroIncognitoMode(cfg, useIncognito, noIncognito)
+		cmd.DoKiroIDCLogin(cfg, options, kiroIDCStartURL, kiroIDCRegion, kiroIDCFlow)
 	} else if kiroImport {
 		cmd.DoKiroImport(cfg, options)
 	} else {
