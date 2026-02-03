@@ -299,17 +299,28 @@ func BuildKiroPayloadFromOpenAI(openaiBody []byte, modelID, profileArn, origin s
 		}
 	}
 
+	// Session IDs: extract from messages[].additional_kwargs (LangChain format) or random
+	conversationID := extractMetadataFromMessages(messages, "conversationId")
+	continuationID := extractMetadataFromMessages(messages, "continuationId")
+	if conversationID == "" {
+		conversationID = uuid.New().String()
+	}
+
 	payload := KiroPayload{
 		ConversationState: KiroConversationState{
-			AgentContinuationID: uuid.New().String(),
-			AgentTaskType:       "vibe",
-			ChatTriggerType:     "MANUAL",
-			ConversationID:      uuid.New().String(),
-			CurrentMessage:      currentMessage,
-			History:             history,
+			AgentTaskType:   "vibe",
+			ChatTriggerType: "MANUAL",
+			ConversationID:  conversationID,
+			CurrentMessage:  currentMessage,
+			History:         history,
 		},
 		ProfileArn:      profileArn,
 		InferenceConfig: inferenceConfig,
+	}
+
+	// Only set AgentContinuationID if client provided
+	if continuationID != "" {
+		payload.ConversationState.AgentContinuationID = continuationID
 	}
 
 	result, err := json.Marshal(payload)
@@ -335,6 +346,18 @@ func normalizeOrigin(origin string) string {
 	default:
 		return origin
 	}
+}
+
+// extractMetadataFromMessages extracts metadata from messages[].additional_kwargs (LangChain format).
+// Searches from the last message backwards, returns empty string if not found.
+func extractMetadataFromMessages(messages gjson.Result, key string) string {
+	arr := messages.Array()
+	for i := len(arr) - 1; i >= 0; i-- {
+		if val := arr[i].Get("additional_kwargs." + key); val.Exists() && val.String() != "" {
+			return val.String()
+		}
+	}
+	return ""
 }
 
 // extractSystemPromptFromOpenAI extracts system prompt from OpenAI messages
@@ -785,7 +808,6 @@ func hasThinkingTagInBody(body []byte) bool {
 	bodyStr := string(body)
 	return strings.Contains(bodyStr, "<thinking_mode>") || strings.Contains(bodyStr, "<max_thinking_length>")
 }
-
 
 // extractToolChoiceHint extracts tool_choice from OpenAI request and returns a system prompt hint.
 // OpenAI tool_choice values:
