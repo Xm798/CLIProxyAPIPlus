@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -660,4 +661,21 @@ func ExtractRegionFromMetadata(metadata map[string]interface{}) string {
 	}
 
 	return DefaultKiroRegion
+}
+
+func buildURL(endpoint, path string, queryParams map[string]string) string {
+	fullURL := fmt.Sprintf("%s/%s", endpoint, path)
+	if len(queryParams) > 0 {
+		values := url.Values{}
+		for key, value := range queryParams {
+			if value == "" {
+				continue
+			}
+			values.Set(key, value)
+		}
+		if encoded := values.Encode(); encoded != "" {
+			fullURL = fullURL + "?" + encoded
+		}
+	}
+	return fullURL
 }

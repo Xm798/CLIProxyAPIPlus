@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"runtime"
 	"slices"
 	"sync"
@@ -16,57 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// oidcFingerprintKey is the fingerprint key for OIDC requests.
-// OIDC happens before authentication, so no account-specific key is available.
-const oidcFingerprintKey = "oidc-session"
-
-// SetOIDCHeaders sets headers for OIDC API requests.
-func SetOIDCHeaders(req *http.Request) {
-	fp := GlobalFingerprintManager().GetFingerprint(oidcFingerprintKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-amz-user-agent", fmt.Sprintf("aws-sdk-js/%s KiroIDE", fp.OIDCSDKVersion))
-	req.Header.Set("User-Agent", fmt.Sprintf(
-		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/%s#%s m/E KiroIDE",
-		fp.OIDCSDKVersion, fp.OSType, fp.OSVersion, fp.NodeVersion, "sso-oidc", fp.OIDCSDKVersion))
-	req.Header.Set("amz-sdk-invocation-id", uuid.New().String())
-	req.Header.Set("amz-sdk-request", "attempt=1; max=4")
-}
-
-// setRuntimeHeaders sets headers for Kiro runtime API requests.
-// accountKey is used to look up the fingerprint for this account.
-func setRuntimeHeaders(req *http.Request, accessToken string, accountKey string) {
-	fp := GlobalFingerprintManager().GetFingerprint(accountKey)
-	machineID := fp.KiroHash
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("x-amz-user-agent", fmt.Sprintf("aws-sdk-js/%s KiroIDE-%s-%s",
-		fp.RuntimeSDKVersion, fp.KiroVersion, machineID))
-	req.Header.Set("User-Agent", fmt.Sprintf(
-		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererruntime#%s m/N,E KiroIDE-%s-%s",
-		fp.RuntimeSDKVersion, fp.OSType, fp.OSVersion, fp.NodeVersion, fp.RuntimeSDKVersion,
-		fp.KiroVersion, machineID))
-	req.Header.Set("amz-sdk-invocation-id", uuid.New().String())
-	req.Header.Set("amz-sdk-request", "attempt=1; max=1")
-}
-
-// buildURL constructs a URL with query parameters.
-func buildURL(endpoint, path string, queryParams map[string]string) string {
-	fullURL := fmt.Sprintf("%s/%s", endpoint, path)
-	if len(queryParams) > 0 {
-		values := url.Values{}
-		for key, value := range queryParams {
-			if value == "" {
-				continue
-			}
-			values.Set(key, value)
-		}
-		if encoded := values.Encode(); encoded != "" {
-			fullURL = fullURL + "?" + encoded
-		}
-	}
-	return fullURL
-}
-
-// Fingerprint 多维度指纹信息 (用于运行时请求伪装)
+// Fingerprint holds multi-dimensional fingerprint data for runtime request disguise.
 type Fingerprint struct {
 	OIDCSDKVersion      string // 3.7xx (AWS SDK JS)
 	RuntimeSDKVersion   string // 1.0.x (runtime API)
@@ -78,7 +27,7 @@ type Fingerprint struct {
 	KiroHash            string // SHA256
 }
 
-// FingerprintConfig 外部指纹配置
+// FingerprintConfig holds external fingerprint overrides.
 type FingerprintConfig struct {
 	OIDCSDKVersion      string
 	RuntimeSDKVersion   string
@@ -90,7 +39,7 @@ type FingerprintConfig struct {
 	KiroHash            string
 }
 
-// FingerprintManager 指纹管理器
+// FingerprintManager manages per-account fingerprint generation and caching.
 type FingerprintManager struct {
 	mu           sync.RWMutex
 	fingerprints map[string]*Fingerprint // tokenKey -> fingerprint
@@ -101,6 +50,7 @@ type FingerprintManager struct {
 var (
 	// SDK versions
 	oidcSDKVersions = []string{
+		"3.980.0", "3.975.0", "3.972.0", "3.808.0",
 		"3.738.0", "3.737.0", "3.736.0", "3.735.0",
 	}
 	// SDKVersions for getUsageLimits/ListAvailableModels/GetProfile (runtime API)
@@ -122,14 +72,13 @@ var (
 	}
 	// Kiro IDE versions
 	kiroVersions = []string{
-		"0.8.206", "0.8.140", "0.8.135", "0.8.86", // 0.8.x (Jan 2026)
+		"0.9.2", "0.8.206", "0.8.140", "0.8.135", "0.8.86",
 	}
 	// Global singleton
 	globalFingerprintManager     *FingerprintManager
 	globalFingerprintManagerOnce sync.Once
 )
 
-// GlobalFingerprintManager 返回全局单例
 func GlobalFingerprintManager() *FingerprintManager {
 	globalFingerprintManagerOnce.Do(func() {
 		globalFingerprintManager = NewFingerprintManager()
@@ -137,21 +86,19 @@ func GlobalFingerprintManager() *FingerprintManager {
 	return globalFingerprintManager
 }
 
-// SetGlobalFingerprintConfig 设置全局指纹配置
 func SetGlobalFingerprintConfig(cfg *FingerprintConfig) {
 	GlobalFingerprintManager().SetConfig(cfg)
 }
 
-// SetConfig 设置指纹配置
+// SetConfig applies the config and clears the fingerprint cache.
 func (fm *FingerprintManager) SetConfig(cfg *FingerprintConfig) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	fm.config = cfg
-	// 清空已缓存的指纹，使用新配置重新生成
+	// Clear cached fingerprints so they regenerate with the new config
 	fm.fingerprints = make(map[string]*Fingerprint)
 }
 
-// NewFingerprintManager 创建指纹管理器
 func NewFingerprintManager() *FingerprintManager {
 	return &FingerprintManager{
 		fingerprints: make(map[string]*Fingerprint),
@@ -159,7 +106,7 @@ func NewFingerprintManager() *FingerprintManager {
 	}
 }
 
-// GetFingerprint 获取或生成 Token 关联的指纹
+// GetFingerprint returns the fingerprint for tokenKey, creating one if it doesn't exist.
 func (fm *FingerprintManager) GetFingerprint(tokenKey string) *Fingerprint {
 	fm.mu.RLock()
 	if fp, exists := fm.fingerprints[tokenKey]; exists {
@@ -180,16 +127,14 @@ func (fm *FingerprintManager) GetFingerprint(tokenKey string) *Fingerprint {
 	return fp
 }
 
-// generateFingerprint 生成新的指纹
 func (fm *FingerprintManager) generateFingerprint(tokenKey string) *Fingerprint {
-	// 如果有外部配置，优先使用配置值
 	if fm.config != nil {
 		return fm.generateFromConfig(tokenKey)
 	}
 	return fm.generateRandom(tokenKey)
 }
 
-// generateFromConfig 从配置生成指纹，空字段随机回退
+// generateFromConfig uses config values, falling back to random for empty fields.
 func (fm *FingerprintManager) generateFromConfig(tokenKey string) *Fingerprint {
 	cfg := fm.config
 
@@ -234,7 +179,7 @@ func (fm *FingerprintManager) generateFromConfig(tokenKey string) *Fingerprint {
 	}
 }
 
-// generateRandom generates a deterministic fingerprint based on accountKey.
+// generateRandom generates a deterministic fingerprint seeded by accountKey hash.
 func (fm *FingerprintManager) generateRandom(accountKey string) *Fingerprint {
 	// Use accountKey hash as seed for deterministic random selection
 	hash := sha256.Sum256([]byte(accountKey))
@@ -259,15 +204,13 @@ func (fm *FingerprintManager) generateRandom(accountKey string) *Fingerprint {
 	}
 }
 
-// GenerateAccountKey generates a stable account key from a seed string.
-// Returns a 16-character hex string derived from SHA256 hash.
+// GenerateAccountKey returns a 16-char hex key derived from SHA256(seed).
 func GenerateAccountKey(seed string) string {
 	hash := sha256.Sum256([]byte(seed))
 	return hex.EncodeToString(hash[:8])
 }
 
-// GetAccountKey returns an account key based on available authentication info.
-// This ensures a consistent fingerprint per login session.
+// GetAccountKey derives an account key from clientID > refreshToken > random UUID.
 func GetAccountKey(clientID, refreshToken string) string {
 	// 1. Prefer ClientID
 	if clientID != "" {
@@ -283,8 +226,7 @@ func GetAccountKey(clientID, refreshToken string) string {
 	return GenerateAccountKey(uuid.New().String())
 }
 
-// BuildUserAgent 构建 User-Agent 字符串
-// 格式: aws-sdk-js/{SDKVersion} ua/2.1 os/{OSType}#{OSVersion} lang/js md/nodejs#{NodeVersion} api/codewhispererstreaming#{SDKVersion} m/E KiroIDE-{KiroVersion}-{KiroHash}
+// BuildUserAgent format: aws-sdk-js/{SDKVersion} ua/2.1 os/{OSType}#{OSVersion} lang/js md/nodejs#{NodeVersion} api/codewhispererstreaming#{SDKVersion} m/E KiroIDE-{KiroVersion}-{KiroHash}
 func (fp *Fingerprint) BuildUserAgent() string {
 	return fmt.Sprintf(
 		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererstreaming#%s m/E KiroIDE-%s-%s",
@@ -298,8 +240,7 @@ func (fp *Fingerprint) BuildUserAgent() string {
 	)
 }
 
-// BuildAmzUserAgent 构建 X-Amz-User-Agent 字符串
-// 格式: aws-sdk-js/{SDKVersion} KiroIDE-{KiroVersion}-{KiroHash}
+// BuildAmzUserAgent format: aws-sdk-js/{SDKVersion} KiroIDE-{KiroVersion}-{KiroHash}
 func (fp *Fingerprint) BuildAmzUserAgent() string {
 	return fmt.Sprintf(
 		"aws-sdk-js/%s KiroIDE-%s-%s",
@@ -307,4 +248,29 @@ func (fp *Fingerprint) BuildAmzUserAgent() string {
 		fp.KiroVersion,
 		fp.KiroHash,
 	)
+}
+
+func SetOIDCHeaders(req *http.Request) {
+	fp := GlobalFingerprintManager().GetFingerprint("oidc-session")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-amz-user-agent", fmt.Sprintf("aws-sdk-js/%s KiroIDE", fp.OIDCSDKVersion))
+	req.Header.Set("User-Agent", fmt.Sprintf(
+		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/%s#%s m/E KiroIDE",
+		fp.OIDCSDKVersion, fp.OSType, fp.OSVersion, fp.NodeVersion, "sso-oidc", fp.OIDCSDKVersion))
+	req.Header.Set("amz-sdk-invocation-id", uuid.New().String())
+	req.Header.Set("amz-sdk-request", "attempt=1; max=4")
+}
+
+func setRuntimeHeaders(req *http.Request, accessToken string, accountKey string) {
+	fp := GlobalFingerprintManager().GetFingerprint(accountKey)
+	machineID := fp.KiroHash
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("x-amz-user-agent", fmt.Sprintf("aws-sdk-js/%s KiroIDE-%s-%s",
+		fp.RuntimeSDKVersion, fp.KiroVersion, machineID))
+	req.Header.Set("User-Agent", fmt.Sprintf(
+		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererruntime#%s m/N,E KiroIDE-%s-%s",
+		fp.RuntimeSDKVersion, fp.OSType, fp.OSVersion, fp.NodeVersion, fp.RuntimeSDKVersion,
+		fp.KiroVersion, machineID))
+	req.Header.Set("amz-sdk-invocation-id", uuid.New().String())
+	req.Header.Set("amz-sdk-request", "attempt=1; max=1")
 }
