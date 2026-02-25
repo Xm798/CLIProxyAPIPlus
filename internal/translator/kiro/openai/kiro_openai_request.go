@@ -236,16 +236,16 @@ func BuildKiroPayloadFromOpenAI(openaiBody []byte, modelID, profileArn, origin s
 	// Kiro API supports official thinking/reasoning mode via <thinking_mode> tag.
 	// When set to "enabled", Kiro returns reasoning content as official reasoningContentEvent
 	// rather than inline <thinking> tags in assistantResponseEvent.
-	// We use a high max_thinking_length to allow extensive reasoning.
+	// Use a conservative thinking budget to reduce latency/cost spikes in long sessions.
 	if thinkingEnabled {
 		thinkingHint := `<thinking_mode>enabled</thinking_mode>
-<max_thinking_length>200000</max_thinking_length>`
+<max_thinking_length>16000</max_thinking_length>`
 		if systemPrompt != "" {
 			systemPrompt = thinkingHint + "\n\n" + systemPrompt
 		} else {
 			systemPrompt = thinkingHint
 		}
-		log.Debugf("kiro-openai: injected thinking prompt (official mode)")
+		log.Infof("kiro-openai: injected thinking prompt (official mode), has_tools: %v", len(kiroTools) > 0)
 	}
 
 	// Process messages and build history
@@ -605,6 +605,7 @@ func processOpenAIMessages(messages gjson.Result, modelID, origin string) ([]Kir
 
 	// Truncate history if too long to prevent Kiro API errors
 	history = truncateHistoryIfNeeded(history)
+	history, currentToolResults = filterOrphanedToolResults(history, currentToolResults)
 
 	return history, currentUserMsg, currentToolResults
 }
@@ -618,6 +619,61 @@ func truncateHistoryIfNeeded(history []KiroHistoryMessage) []KiroHistoryMessage 
 
 	log.Debugf("kiro-openai: truncating history from %d to %d messages", len(history), kiroMaxHistoryMessages)
 	return history[len(history)-kiroMaxHistoryMessages:]
+}
+
+func filterOrphanedToolResults(history []KiroHistoryMessage, currentToolResults []KiroToolResult) ([]KiroHistoryMessage, []KiroToolResult) {
+	// Remove tool results with no matching tool_use in retained history.
+	// This happens after truncation when the assistant turn that produced tool_use
+	// is dropped but a later user/tool_result survives.
+	validToolUseIDs := make(map[string]bool)
+	for _, h := range history {
+		if h.AssistantResponseMessage == nil {
+			continue
+		}
+		for _, tu := range h.AssistantResponseMessage.ToolUses {
+			validToolUseIDs[tu.ToolUseID] = true
+		}
+	}
+
+	for i, h := range history {
+		if h.UserInputMessage == nil || h.UserInputMessage.UserInputMessageContext == nil {
+			continue
+		}
+		ctx := h.UserInputMessage.UserInputMessageContext
+		if len(ctx.ToolResults) == 0 {
+			continue
+		}
+
+		filtered := make([]KiroToolResult, 0, len(ctx.ToolResults))
+		for _, tr := range ctx.ToolResults {
+			if validToolUseIDs[tr.ToolUseID] {
+				filtered = append(filtered, tr)
+				continue
+			}
+			log.Debugf("kiro-openai: dropping orphaned tool_result in history[%d]: toolUseId=%s (no matching tool_use)", i, tr.ToolUseID)
+		}
+		ctx.ToolResults = filtered
+		if len(ctx.ToolResults) == 0 && len(ctx.Tools) == 0 {
+			h.UserInputMessage.UserInputMessageContext = nil
+		}
+	}
+
+	if len(currentToolResults) > 0 {
+		filtered := make([]KiroToolResult, 0, len(currentToolResults))
+		for _, tr := range currentToolResults {
+			if validToolUseIDs[tr.ToolUseID] {
+				filtered = append(filtered, tr)
+				continue
+			}
+			log.Debugf("kiro-openai: dropping orphaned tool_result in currentMessage: toolUseId=%s (no matching tool_use)", tr.ToolUseID)
+		}
+		if len(filtered) != len(currentToolResults) {
+			log.Infof("kiro-openai: dropped %d orphaned tool_result(s) from currentMessage", len(currentToolResults)-len(filtered))
+		}
+		currentToolResults = filtered
+	}
+
+	return history, currentToolResults
 }
 
 // buildUserMessageFromOpenAI builds a user message from OpenAI format and extracts tool results
