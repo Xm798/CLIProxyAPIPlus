@@ -894,8 +894,11 @@ func (e *KiroExecutor) executeWithRetry(ctx context.Context, auth *cliproxyauth.
 
 				log.Warnf("kiro: received 402 (monthly limit). Upstream body: %s", string(respBody))
 
-				// Return upstream error body directly
-				return resp, statusErr{code: httpResp.StatusCode, msg: string(respBody)}
+				// Wire up cooldown and switch to next endpoint
+				cooldownMgr.SetCooldown(tokenKey, kiroauth.CalculateCooldownUntilNextDay(), kiroauth.CooldownReasonQuotaExhausted)
+				log.Infof("kiro: token %s set to cooldown until next day (quota exhausted)", tokenKey)
+				last429Err = statusErr{code: httpResp.StatusCode, msg: string(respBody)}
+				break // try next endpoint
 			}
 
 			// Handle 403 errors - Access Denied / Token Expired
@@ -1336,8 +1339,11 @@ func (e *KiroExecutor) executeStreamWithRetry(ctx context.Context, auth *cliprox
 
 				log.Warnf("kiro: stream received 402 (monthly limit). Upstream body: %s", string(respBody))
 
-				// Return upstream error body directly
-				return nil, statusErr{code: httpResp.StatusCode, msg: string(respBody)}
+				// Wire up cooldown and switch to next endpoint
+				cooldownMgr.SetCooldown(tokenKey, kiroauth.CalculateCooldownUntilNextDay(), kiroauth.CooldownReasonQuotaExhausted)
+				log.Infof("kiro: stream token %s set to cooldown until next day (quota exhausted)", tokenKey)
+				last429Err = statusErr{code: httpResp.StatusCode, msg: string(respBody)}
+				break // try next endpoint
 			}
 
 			// Handle 403 errors - Access Denied / Token Expired
@@ -2539,9 +2545,32 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 	isTextBlockOpen := false
 	var outputLen int
 
+	// Track whether stream completed normally for cleanup
+	streamCompleted := false
+
 	// Ensure usage is published even on early return
 	defer func() {
 		reporter.publish(ctx, totalUsage)
+	}()
+
+	// Emit closing SSE events on abnormal stream termination to prevent
+	// Claude Code client from being left in a confused state
+	defer func() {
+		if !streamCompleted && messageStartSent {
+			log.Warnf("kiro: stream terminated abnormally, emitting cleanup SSE events")
+			if isTextBlockOpen && contentBlockIndex >= 0 {
+				blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
+				out <- cliproxyexecutor.StreamChunk{Payload: []byte(string(blockStop) + "\n\n")}
+			}
+			if isThinkingBlockOpen && thinkingBlockIndex >= 0 {
+				blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(thinkingBlockIndex)
+				out <- cliproxyexecutor.StreamChunk{Payload: []byte(string(blockStop) + "\n\n")}
+			}
+			msgDelta := kiroclaude.BuildClaudeMessageDeltaEvent("end_turn", totalUsage)
+			out <- cliproxyexecutor.StreamChunk{Payload: []byte(string(msgDelta) + "\n\n")}
+			msgStop := kiroclaude.BuildClaudeMessageStopOnlyEvent()
+			out <- cliproxyexecutor.StreamChunk{Payload: []byte(string(msgStop) + "\n\n")}
+		}
 	}()
 
 	for {
@@ -3565,6 +3594,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 	for _, chunk := range sseData {
 		enqueueTranslatedSSE(out, chunk)
 	}
+	streamCompleted = true
 	// reporter.publish is called via defer
 }
 

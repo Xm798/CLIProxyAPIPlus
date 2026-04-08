@@ -29,6 +29,11 @@ const (
 
 	// Auth timeout
 	authTimeout = 10 * time.Minute
+
+	// minRefreshTokenLen is the minimum expected length for a valid refresh token.
+	// Real Kiro refresh tokens are typically 500+ chars. Tokens shorter than this
+	// are likely truncated copies from Kiro IDE's display (which shows "...").
+	minRefreshTokenLen = 100
 )
 
 // KiroTokenResponse represents the response from Kiro token endpoint.
@@ -246,6 +251,11 @@ func (o *KiroOAuth) RefreshToken(ctx context.Context, refreshToken string) (*Kir
 // RefreshTokenWithFingerprint refreshes an expired access token with a specific fingerprint.
 // tokenKey is used to generate a consistent fingerprint for the token.
 func (o *KiroOAuth) RefreshTokenWithFingerprint(ctx context.Context, refreshToken, tokenKey string) (*KiroTokenData, error) {
+	// Validate refresh token is not truncated (Kiro IDE truncates displayed tokens)
+	if len(refreshToken) < minRefreshTokenLen || strings.Contains(refreshToken, "...") {
+		return nil, fmt.Errorf("refresh token appears truncated (length: %d). Please copy the full token from Kiro IDE, not the truncated display value", len(refreshToken))
+	}
+
 	payload := map[string]string{
 		"refreshToken": refreshToken,
 	}

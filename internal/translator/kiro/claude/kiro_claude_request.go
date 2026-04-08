@@ -245,6 +245,10 @@ func BuildKiroPayload(claudeBody []byte, modelID, profileArn, origin string, isA
 	// Process messages and build history
 	history, currentUserMsg, currentToolResults := processMessages(messages, modelID, origin)
 
+	// Auto-complete: add placeholder tool definitions for tools referenced in history
+	// but absent from the current tools list (e.g., MCP server disconnected mid-conversation)
+	kiroTools = addPlaceholderToolsFromHistory(kiroTools, history)
+
 	// Build content with system prompt.
 	// Keep thinking tags on subsequent turns so multi-turn Claude sessions
 	// continue to emit reasoning events.
@@ -545,6 +549,44 @@ func ensureKiroInputSchema(parameters interface{}) interface{} {
 	}
 }
 
+// normalizeJsonSchema recursively fixes common MCP schema issues that cause Kiro API 400:
+// - "required": null → remove field
+// - "properties": null → replace with {}
+// - missing "type" when "properties" exists → add "type": "object"
+// Note: mutates the input map in place for efficiency.
+func normalizeJsonSchema(schema interface{}) interface{} {
+	obj, ok := schema.(map[string]interface{})
+	if !ok {
+		return schema
+	}
+
+	if req, exists := obj["required"]; exists && req == nil {
+		delete(obj, "required")
+	}
+
+	if props, exists := obj["properties"]; exists && props == nil {
+		obj["properties"] = map[string]interface{}{}
+	}
+
+	if _, hasProps := obj["properties"]; hasProps {
+		if _, hasType := obj["type"]; !hasType {
+			obj["type"] = "object"
+		}
+	}
+
+	if props, ok := obj["properties"].(map[string]interface{}); ok {
+		for key, val := range props {
+			props[key] = normalizeJsonSchema(val)
+		}
+	}
+
+	if items, ok := obj["items"].(map[string]interface{}); ok {
+		obj["items"] = normalizeJsonSchema(items)
+	}
+
+	return obj
+}
+
 // convertClaudeToolsToKiro converts Claude tools to Kiro format
 func convertClaudeToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 	var kiroTools []KiroToolWrapper
@@ -561,6 +603,7 @@ func convertClaudeToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 			inputSchema = inputSchemaResult.Value()
 		}
 		inputSchema = ensureKiroInputSchema(inputSchema)
+		inputSchema = normalizeJsonSchema(inputSchema)
 
 		// Shorten tool name if it exceeds 64 characters (common with MCP tools)
 		originalName := name
@@ -605,6 +648,40 @@ func convertClaudeToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 		})
 	}
 
+	return kiroTools
+}
+
+// addPlaceholderToolsFromHistory generates placeholder tool definitions for tools
+// referenced in history but absent from the current tools list.
+// This prevents Kiro API 400 when MCP tools change between conversation turns
+// (e.g., MCP server disconnects mid-conversation).
+func addPlaceholderToolsFromHistory(kiroTools []KiroToolWrapper, history []KiroHistoryMessage) []KiroToolWrapper {
+	declaredTools := make(map[string]bool, len(kiroTools))
+	for _, t := range kiroTools {
+		declaredTools[t.ToolSpecification.Name] = true
+	}
+
+	seen := make(map[string]bool)
+	for _, h := range history {
+		if h.AssistantResponseMessage != nil {
+			for _, tu := range h.AssistantResponseMessage.ToolUses {
+				if !declaredTools[tu.Name] && !seen[tu.Name] {
+					seen[tu.Name] = true
+					kiroTools = append(kiroTools, KiroToolWrapper{
+						ToolSpecification: KiroToolSpecification{
+							Name:        tu.Name,
+							Description: "Previously used tool",
+							InputSchema: KiroInputSchema{JSON: map[string]interface{}{
+								"type":       "object",
+								"properties": map[string]interface{}{},
+							}},
+						},
+					})
+					log.Debugf("kiro: added placeholder tool definition for history-referenced tool: %s", tu.Name)
+				}
+			}
+		}
+	}
 	return kiroTools
 }
 
@@ -728,6 +805,40 @@ func processMessages(messages gjson.Result, modelID, origin string) ([]KiroHisto
 			log.Infof("kiro: dropped %d orphaned tool_result(s) from currentMessage (compaction artifact)", len(currentToolResults)-len(filtered))
 		}
 		currentToolResults = filtered
+	}
+
+	// POST-PROCESSING: Remove orphaned tool_uses that have no matching tool_result
+	// in any user message. This is the reverse of the orphaned tool_result removal above.
+	// When Claude Code compresses conversation history, it may delete the user message
+	// containing tool_result but keep the assistant message with tool_use, causing Kiro API 400.
+	validToolResultIDs := make(map[string]bool)
+	for _, h := range history {
+		if h.UserInputMessage != nil && h.UserInputMessage.UserInputMessageContext != nil {
+			for _, tr := range h.UserInputMessage.UserInputMessageContext.ToolResults {
+				validToolResultIDs[tr.ToolUseID] = true
+			}
+		}
+	}
+	for _, tr := range currentToolResults {
+		validToolResultIDs[tr.ToolUseID] = true
+	}
+
+	for i, h := range history {
+		if h.AssistantResponseMessage != nil && len(h.AssistantResponseMessage.ToolUses) > 0 {
+			filtered := make([]KiroToolUse, 0, len(h.AssistantResponseMessage.ToolUses))
+			for _, tu := range h.AssistantResponseMessage.ToolUses {
+				if validToolResultIDs[tu.ToolUseID] {
+					filtered = append(filtered, tu)
+				} else {
+					log.Debugf("kiro: dropping orphaned tool_use in history[%d]: toolUseId=%s (no matching tool_result)", i, tu.ToolUseID)
+				}
+			}
+			if len(filtered) == 0 {
+				history[i].AssistantResponseMessage.ToolUses = nil
+			} else {
+				history[i].AssistantResponseMessage.ToolUses = filtered
+			}
+		}
 	}
 
 	return history, currentUserMsg, currentToolResults
