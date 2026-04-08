@@ -139,8 +139,9 @@ func ConvertOpenAIRequestToKiro(modelName string, inputRawJSON []byte, stream bo
 // isChatOnly parameter disables tool calling for -chat model variants (pure conversation mode).
 // headers parameter allows checking Anthropic-Beta header for thinking mode detection.
 // metadata parameter is kept for API compatibility but no longer used for thinking configuration.
-// Returns the payload and a boolean indicating whether thinking mode was injected.
-func BuildKiroPayloadFromOpenAI(openaiBody []byte, modelID, profileArn, origin string, isAgentic, isChatOnly bool, headers http.Header, metadata map[string]any) ([]byte, bool) {
+// Returns the payload, a boolean indicating whether thinking mode was injected,
+// and a nil tool name map (OpenAI path does not shorten tool names).
+func BuildKiroPayloadFromOpenAI(openaiBody []byte, modelID, profileArn, origin string, isAgentic, isChatOnly bool, headers http.Header, metadata map[string]any) ([]byte, bool, map[string]string) {
 	// Extract max_tokens for potential use in inferenceConfig
 	// Handle -1 as "use maximum" (Kiro max output is ~32000 tokens)
 	const kiroMaxOutputTokens = 32000
@@ -326,10 +327,10 @@ func BuildKiroPayloadFromOpenAI(openaiBody []byte, modelID, profileArn, origin s
 	result, err := json.Marshal(payload)
 	if err != nil {
 		log.Debugf("kiro-openai: failed to marshal payload: %v", err)
-		return nil, false
+		return nil, false, nil
 	}
 
-	return result, thinkingEnabled
+	return result, thinkingEnabled, nil
 }
 
 // normalizeOrigin normalizes origin value for Kiro API compatibility

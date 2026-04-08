@@ -144,8 +144,9 @@ func ConvertClaudeRequestToKiro(modelName string, inputRawJSON []byte, stream bo
 // headers parameter allows checking Anthropic-Beta header for thinking mode detection.
 // metadata parameter is kept for API compatibility but no longer used for thinking configuration.
 // Supports thinking mode - when enabled, injects thinking tags into system prompt.
-// Returns the payload and a boolean indicating whether thinking mode was injected.
-func BuildKiroPayload(claudeBody []byte, modelID, profileArn, origin string, isAgentic, isChatOnly bool, headers http.Header, metadata map[string]any) ([]byte, bool) {
+// Returns the payload, a boolean indicating whether thinking mode was injected,
+// and a map of shortened→original tool names for reverse mapping in responses.
+func BuildKiroPayload(claudeBody []byte, modelID, profileArn, origin string, isAgentic, isChatOnly bool, headers http.Header, metadata map[string]any) ([]byte, bool, map[string]string) {
 	// Extract max_tokens for potential use in inferenceConfig
 	// Handle -1 as "use maximum" (Kiro max output is ~32000 tokens)
 	const kiroMaxOutputTokens = 32000
@@ -224,7 +225,7 @@ func BuildKiroPayload(claudeBody []byte, modelID, profileArn, origin string, isA
 	}
 
 	// Convert Claude tools to Kiro format
-	kiroTools := convertClaudeToolsToKiro(tools)
+	kiroTools, toolNameMap := convertClaudeToolsToKiro(tools)
 
 	// Thinking mode implementation:
 	// Kiro API supports official thinking/reasoning mode via <thinking_mode> tag.
@@ -326,10 +327,10 @@ func BuildKiroPayload(claudeBody []byte, modelID, profileArn, origin string, isA
 	result, err := json.Marshal(payload)
 	if err != nil {
 		log.Debugf("kiro: failed to marshal payload: %v", err)
-		return nil, false
+		return nil, false, nil
 	}
 
-	return result, thinkingEnabled
+	return result, thinkingEnabled, toolNameMap
 }
 
 // normalizeOrigin normalizes origin value for Kiro API compatibility
@@ -587,11 +588,13 @@ func normalizeJsonSchema(schema interface{}) interface{} {
 	return obj
 }
 
-// convertClaudeToolsToKiro converts Claude tools to Kiro format
-func convertClaudeToolsToKiro(tools gjson.Result) []KiroToolWrapper {
+// convertClaudeToolsToKiro converts Claude tools to Kiro format.
+// Returns the converted tools and a map of shortened→original tool names for reverse mapping.
+func convertClaudeToolsToKiro(tools gjson.Result) ([]KiroToolWrapper, map[string]string) {
 	var kiroTools []KiroToolWrapper
+	toolNameMap := make(map[string]string) // shortened → original
 	if !tools.IsArray() {
-		return kiroTools
+		return kiroTools, toolNameMap
 	}
 
 	for _, tool := range tools.Array() {
@@ -609,6 +612,7 @@ func convertClaudeToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 		originalName := name
 		name = shortenToolNameIfNeeded(name)
 		if name != originalName {
+			toolNameMap[name] = originalName
 			log.Debugf("kiro: shortened tool name from '%s' to '%s'", originalName, name)
 		}
 
@@ -648,7 +652,7 @@ func convertClaudeToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 		})
 	}
 
-	return kiroTools
+	return kiroTools, toolNameMap
 }
 
 // addPlaceholderToolsFromHistory generates placeholder tool definitions for tools
