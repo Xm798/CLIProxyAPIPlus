@@ -303,9 +303,8 @@ func (c *SSOOIDCClient) CreateTokenWithRegion(ctx context.Context, clientID, cli
 
 // RefreshTokenWithRegion refreshes an access token using the refresh token with a specific OIDC region.
 func (c *SSOOIDCClient) RefreshTokenWithRegion(ctx context.Context, clientID, clientSecret, refreshToken, region, startURL string) (*KiroTokenData, error) {
-	// Validate refresh token is not truncated (Kiro IDE truncates displayed tokens)
-	if len(refreshToken) < minRefreshTokenLen || strings.Contains(refreshToken, "...") {
-		return nil, fmt.Errorf("refresh token appears truncated (length: %d). Please copy the full token from Kiro IDE, not the truncated display value", len(refreshToken))
+	if err := validateRefreshToken(refreshToken); err != nil {
+		return nil, err
 	}
 
 	if region == "" {
@@ -720,9 +719,8 @@ func (c *SSOOIDCClient) CreateToken(ctx context.Context, clientID, clientSecret,
 // RefreshToken refreshes an access token using the refresh token.
 // Includes retry logic and improved error handling for better reliability.
 func (c *SSOOIDCClient) RefreshToken(ctx context.Context, clientID, clientSecret, refreshToken string) (*KiroTokenData, error) {
-	// Validate refresh token is not truncated (Kiro IDE truncates displayed tokens)
-	if len(refreshToken) < minRefreshTokenLen || strings.Contains(refreshToken, "...") {
-		return nil, fmt.Errorf("refresh token appears truncated (length: %d). Please copy the full token from Kiro IDE, not the truncated display value", len(refreshToken))
+	if err := validateRefreshToken(refreshToken); err != nil {
+		return nil, err
 	}
 
 	payload := map[string]string{

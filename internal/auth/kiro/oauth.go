@@ -36,6 +36,15 @@ const (
 	minRefreshTokenLen = 100
 )
 
+// validateRefreshToken rejects refresh tokens that look truncated (Kiro IDE's
+// displayed token is abbreviated with "..." and is unusable for refresh).
+func validateRefreshToken(refreshToken string) error {
+	if len(refreshToken) < minRefreshTokenLen || strings.Contains(refreshToken, "...") {
+		return fmt.Errorf("refresh token appears truncated (length: %d). Please copy the full token from Kiro IDE, not the truncated display value", len(refreshToken))
+	}
+	return nil
+}
+
 // KiroTokenResponse represents the response from Kiro token endpoint.
 type KiroTokenResponse struct {
 	AccessToken  string `json:"accessToken"`
@@ -251,9 +260,8 @@ func (o *KiroOAuth) RefreshToken(ctx context.Context, refreshToken string) (*Kir
 // RefreshTokenWithFingerprint refreshes an expired access token with a specific fingerprint.
 // tokenKey is used to generate a consistent fingerprint for the token.
 func (o *KiroOAuth) RefreshTokenWithFingerprint(ctx context.Context, refreshToken, tokenKey string) (*KiroTokenData, error) {
-	// Validate refresh token is not truncated (Kiro IDE truncates displayed tokens)
-	if len(refreshToken) < minRefreshTokenLen || strings.Contains(refreshToken, "...") {
-		return nil, fmt.Errorf("refresh token appears truncated (length: %d). Please copy the full token from Kiro IDE, not the truncated display value", len(refreshToken))
+	if err := validateRefreshToken(refreshToken); err != nil {
+		return nil, err
 	}
 
 	payload := map[string]string{

@@ -581,8 +581,13 @@ func normalizeJsonSchema(schema interface{}) interface{} {
 		}
 	}
 
-	if items, ok := obj["items"].(map[string]interface{}); ok {
+	switch items := obj["items"].(type) {
+	case map[string]interface{}:
 		obj["items"] = normalizeJsonSchema(items)
+	case []interface{}:
+		for i, item := range items {
+			items[i] = normalizeJsonSchema(item)
+		}
 	}
 
 	return obj
